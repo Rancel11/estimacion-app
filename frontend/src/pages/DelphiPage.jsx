@@ -1,3 +1,8 @@
+/**
+ * DelphiPage.jsx — EstimaSoft v2
+ * Página completa de Wideband Delphi con GestionExpertos y SeccionUnidadesPanel integrados.
+ * No requiere importar esos componentes por separado.
+ */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -5,30 +10,18 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
 import {
-  Settings,
-  Target,
-  BarChart2,
-  Handshake,
-  Flag,
-  Plus,
-  Trash2,
-  ChevronDown,
-  ChevronUp,
-  X,
-  CheckCircle,
-  Download,
-  ArrowLeft,
-  Users,
-  Layers,
-  Activity,
-  AlertTriangle,
-  ClipboardList,
+  Settings, Target, BarChart2, Handshake, Flag, Plus, Trash2,
+  ChevronDown, ChevronUp, X, CheckCircle, Download, ArrowLeft,
+  Users, Layers, Activity, ClipboardList, UserCog, Edit2,
+  ShieldCheck, Eye, EyeOff,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { getSesiones, cambiarEstado, eliminarItem } from '../services/api';
+import { getSesiones, cambiarEstado, eliminarItem, getCatalogos } from '../services/api';
 import API from '../services/api';
 
-/* ── Helpers de API Delphi ─────────────────────────────── */
+/* ─────────────────────────────────────────────────────────
+   HELPERS API DELPHI
+───────────────────────────────────────────────────────── */
 const delphi = {
   getExpertos:          ()           => API.get('/delphi/expertos'),
   getParticipantes:     sid          => API.get(`/delphi/sesion/${sid}/participantes`),
@@ -37,10 +30,13 @@ const delphi = {
   delParticipante:      (sid, uid)   => API.delete(`/delphi/sesion/${sid}/participantes/${uid}`),
   getSecciones:         sid          => API.get(`/delphi/sesion/${sid}/secciones`),
   crearSeccion:         (sid, d)     => API.post(`/delphi/sesion/${sid}/secciones`, d),
+  editarSeccion:        (id, d)      => API.put(`/delphi/secciones/${id}`, d),
   delSeccion:           id           => API.delete(`/delphi/secciones/${id}`),
   getItemsSeccion:      secId        => API.get(`/delphi/secciones/${secId}/items`),
   addItem:              (secId, d)   => API.post(`/delphi/secciones/${secId}/items`, d),
   addItemsBulk:         (secId, d)   => API.post(`/delphi/secciones/${secId}/items/bulk`, d),
+  addUnidadSeccion:     (secId, d)   => API.post(`/delphi/secciones/${secId}/unidades`, d),
+  delUnidadSeccion:     (secId, uid) => API.delete(`/delphi/secciones/${secId}/unidades/${uid}`),
   getRondas:            sid          => API.get(`/delphi/sesion/${sid}/rondas`),
   crearRonda:           (sid, d)     => API.post(`/delphi/sesion/${sid}/rondas`, d),
   cerrarRonda:          rid          => API.put(`/delphi/rondas/${rid}/cerrar`),
@@ -55,26 +51,41 @@ const delphi = {
   exportar:             (sid, fmt)   => API.get(`/delphi/sesion/${sid}/exportar?formato=${fmt}`, { responseType: fmt === 'JSON' ? 'json' : 'blob' }),
 };
 
+const usuariosAPI = {
+  getAll:    ()       => API.get('/usuarios'),
+  getRoles:  ()       => API.get('/usuarios/roles'),
+  create:    data     => API.post('/usuarios', data),
+  update:    (id, d)  => API.put(`/usuarios/${id}`, d),
+  delete:    id       => API.delete(`/usuarios/${id}`),
+};
+
+/* ─────────────────────────────────────────────────────────
+   UTILS
+───────────────────────────────────────────────────────── */
 const cvColor = cv => cv < 20 ? 'var(--green)' : cv < 35 ? 'var(--amber)' : 'var(--red)';
 const cvLabel = cv => cv < 20 ? 'Consenso' : cv < 35 ? 'Divergente' : 'Alta divergencia';
 const cvBadge = cv => cv < 20 ? 'badge-green' : cv < 35 ? 'badge-amber' : 'badge-red';
 
-/* ════════════════════════════════════════════════════════
+const COMPLEJIDAD_BADGE = { alta: 'badge-red', media: 'badge-amber', baja: 'badge-green' };
+const COMPLEJIDAD_OPTS  = ['', 'baja', 'media', 'alta'];
+
+const ROL_BADGE = { admin: 'badge-red', moderador: 'badge-purple', experto: 'badge-blue' };
+
+/* ═════════════════════════════════════════════════════════
    COMPONENTE PRINCIPAL
-════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════  */
 export default function DelphiPage() {
   const { user } = useAuth();
   const isExperto = user?.rol === 'experto';
   return isExperto ? <ExpertoView user={user} /> : <ModeradorView user={user} />;
 }
 
-/* ════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════
    VISTA DEL EXPERTO
-════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════  */
 function ExpertoView({ user }) {
   const [misSesiones, setMisSesiones] = useState([]);
   const [sesionId,    setSesionId]    = useState(null);
-  const [sesionInfo,  setSesionInfo]  = useState(null);
   const [ronda,       setRonda]       = useState(null);
   const [items,       setItems]       = useState([]);
   const [capture,     setCapture]     = useState({});
@@ -90,14 +101,12 @@ function ExpertoView({ user }) {
   }, []);
 
   const seleccionar = async (s) => {
-    setSesionInfo(s);
     setSesionId(s.id);
     if (s.ronda_activa_id) {
       setRonda({ id: s.ronda_activa_id, numero_ronda: s.ronda_activa_num });
       const secsRes = await delphi.getSecciones(s.id);
-      const secs = secsRes.data;
       const todosItems = [];
-      for (const sec of secs) {
+      for (const sec of secsRes.data) {
         const itRes = await delphi.getItemsSeccion(sec.id);
         itRes.data.forEach(it => todosItems.push({ ...it, seccion_nombre: sec.nombre }));
       }
@@ -189,7 +198,7 @@ function ExpertoView({ user }) {
                 </div>
 
                 {mensaje && (
-                  <div className={`alert ${mensaje.startsWith('Estimaciones') ? 'alert-success' : mensaje.startsWith('Error') ? 'alert-error' : 'alert-info'}`} style={{ marginBottom: 16 }}>
+                  <div className={`alert ${mensaje.startsWith('Estimaciones') ? 'alert-success' : 'alert-error'}`} style={{ marginBottom: 16 }}>
                     {mensaje}
                   </div>
                 )}
@@ -215,9 +224,7 @@ function ExpertoView({ user }) {
                           <td>
                             <input
                               className="form-control"
-                              type="number"
-                              min="0"
-                              step="0.5"
+                              type="number" min="0" step="0.5"
                               style={{ width: 120 }}
                               placeholder="0"
                               value={capture[it.id] || ''}
@@ -257,21 +264,23 @@ function ExpertoView({ user }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════
    VISTA DEL MODERADOR
-════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════  */
 function ModeradorView({ user }) {
-  const navigate        = useNavigate();
-  const [searchParams]  = useSearchParams();
-  const sesionParam     = searchParams.get('sesion');
-  const proyectoParam   = searchParams.get('proyecto');
+  const navigate       = useNavigate();
+  const [searchParams] = useSearchParams();
+  const sesionParam    = searchParams.get('sesion');
+  const proyectoParam  = searchParams.get('proyecto');
 
+  /* ── Estado principal ── */
   const [sesiones,      setSesiones]      = useState([]);
   const [sesionId,      setSesionId]      = useState('');
   const [resumen,       setResumen]       = useState(null);
   const [secciones,     setSecciones]     = useState([]);
   const [participantes, setParticipantes] = useState([]);
   const [expertosDisp,  setExpertosDisp]  = useState([]);
+  const [catalogoUnidades, setCatalogoUnidades] = useState([]);
   const [rondas,        setRondas]        = useState([]);
   const [rondaActiva,   setRondaActiva]   = useState(null);
   const [estimaciones,  setEstimaciones]  = useState([]);
@@ -282,30 +291,30 @@ function ModeradorView({ user }) {
   const [loading,       setLoading]       = useState(false);
   const [saving,        setSaving]        = useState(false);
 
-  // Modals
-  const [seccionModal, setSeccionModal] = useState(false);
-  const [seccionForm,  setSeccionForm]  = useState({ nombre: '', descripcion: '' });
-  const [itemModal,    setItemModal]    = useState({ open: false, secId: null });
-  const [itemForm,     setItemForm]     = useState({ nombre: '', complejidad: '' });
-  const [bulkModal,    setBulkModal]    = useState({ open: false, secId: null });
-  const [bulkText,     setBulkText]     = useState('');
-  const [partModal,    setPartModal]    = useState(false);
-  const [selectedExp,  setSelectedExp]  = useState([]);
-  const [consensoForm, setConsensoForm] = useState({});
+  /* ── Modales ── */
+  const [gestionModal,  setGestionModal]  = useState(false);   // GestionExpertos
+  const [partModal,     setPartModal]     = useState(false);
+  const [selectedExp,   setSelectedExp]   = useState([]);
+  const [bulkModal,     setBulkModal]     = useState({ open: false, secId: null });
+  const [bulkText,      setBulkText]      = useState('');
+  const [consensoForm,  setConsensoForm]  = useState({});
 
   const sseRef = useRef(null);
 
-  /* ── Carga inicial ──────────────────────────────────── */
+  /* ── Carga inicial ── */
   useEffect(() => {
     Promise.all([
       getSesiones(),
       delphi.getFormatos(),
       delphi.getExpertos(),
-    ]).then(([sesRes, fmtRes, expRes]) => {
+      getCatalogos(),
+    ]).then(([sesRes, fmtRes, expRes, catRes]) => {
       const delphiSesiones = sesRes.data.filter(s => s.metodo === 'DELPHI');
       setSesiones(delphiSesiones);
       setFormatos(fmtRes.data);
       setExpertosDisp(expRes.data);
+      // getCatalogos devuelve { metodos, unidades, roles }
+      setCatalogoUnidades(catRes.data?.unidades || []);
 
       if (sesionParam) {
         const existe = delphiSesiones.find(s => String(s.id) === sesionParam);
@@ -317,7 +326,7 @@ function ModeradorView({ user }) {
     });
   }, []); // eslint-disable-line
 
-  /* ── Cargar todo de la sesión ───────────────────────── */
+  /* ── Cargar sesión completa ── */
   const loadAll = useCallback(async (sid) => {
     setLoading(true);
     try {
@@ -351,7 +360,7 @@ function ModeradorView({ user }) {
     setStats(st.data);
   };
 
-  /* ── Cargar ítems de cada sección ───────────────────── */
+  /* ── Ítems de secciones ── */
   useEffect(() => {
     if (!secciones.length || !sesionId) return;
     Promise.all(
@@ -364,7 +373,7 @@ function ModeradorView({ user }) {
     });
   }, [secciones.length, sesionId]); // eslint-disable-line
 
-  /* ── SSE ────────────────────────────────────────────── */
+  /* ── SSE ── */
   const conectarSSE = useCallback((sid) => {
     if (sseRef.current) sseRef.current.close();
     const token = localStorage.getItem('token');
@@ -397,45 +406,7 @@ function ModeradorView({ user }) {
     }
   };
 
-  /* ── Secciones ──────────────────────────────────────── */
-  const handleCrearSeccion = async (e) => {
-    e.preventDefault(); setSaving(true);
-    try {
-      await delphi.crearSeccion(sesionId, { ...seccionForm, orden: secciones.length });
-      setSeccionModal(false); setSeccionForm({ nombre: '', descripcion: '' });
-      loadAll(sesionId);
-    } finally { setSaving(false); }
-  };
-
-  const handleDelSeccion = async (id) => {
-    if (!window.confirm('¿Eliminar la sección y todos sus ítems?')) return;
-    await delphi.delSeccion(id);
-    loadAll(sesionId);
-  };
-
-  /* ── Ítems ──────────────────────────────────────────── */
-  const handleAddItem = async (e) => {
-    e.preventDefault(); setSaving(true);
-    try {
-      await delphi.addItem(itemModal.secId, { ...itemForm, sesion_id: sesionId });
-      setItemModal({ open: false, secId: null });
-      setItemForm({ nombre: '', complejidad: '' });
-      loadAll(sesionId);
-    } finally { setSaving(false); }
-  };
-
-  const handleBulkAdd = async () => {
-    const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
-    if (!lines.length) return;
-    setSaving(true);
-    try {
-      await delphi.addItemsBulk(bulkModal.secId, { sesion_id: sesionId, items: lines.map(nombre => ({ nombre })) });
-      setBulkModal({ open: false, secId: null }); setBulkText('');
-      loadAll(sesionId);
-    } finally { setSaving(false); }
-  };
-
-  /* ── Participantes ──────────────────────────────────── */
+  /* ── Participantes ── */
   const handleAddParts = async () => {
     if (!selectedExp.length) return;
     setSaving(true);
@@ -451,7 +422,19 @@ function ModeradorView({ user }) {
     setParticipantes(p => p.filter(x => x.usuario_id !== uid));
   };
 
-  /* ── Rondas ─────────────────────────────────────────── */
+  /* ── Bulk ítems ── */
+  const handleBulkAdd = async () => {
+    const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return;
+    setSaving(true);
+    try {
+      await delphi.addItemsBulk(bulkModal.secId, { sesion_id: sesionId, items: lines.map(nombre => ({ nombre })) });
+      setBulkModal({ open: false, secId: null }); setBulkText('');
+      loadAll(sesionId);
+    } finally { setSaving(false); }
+  };
+
+  /* ── Rondas ── */
   const handleCrearRonda = async () => {
     setSaving(true);
     try {
@@ -469,7 +452,7 @@ function ModeradorView({ user }) {
     loadAll(sesionId);
   };
 
-  /* ── Consenso ───────────────────────────────────────── */
+  /* ── Consenso ── */
   const allItems = secciones.flatMap(s => (s._items || []).map(it => ({ ...it, seccion_nombre: s.nombre })));
 
   const preFillConsenso = () => {
@@ -495,34 +478,35 @@ function ModeradorView({ user }) {
     } finally { setSaving(false); }
   };
 
-  /* ── Exportar ───────────────────────────────────────── */
+  /* ── Exportar ── */
   const handleExportar = async (codigo) => {
     if (codigo === 'JSON') {
       const { data } = await delphi.exportar(sesionId, 'JSON');
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `delphi_sesion_${sesionId}.json`;
-      a.click();
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = `delphi_sesion_${sesionId}.json`; a.click();
     } else if (codigo === 'CSV') {
       const resp = await API.get(`/delphi/sesion/${sesionId}/exportar?formato=CSV`, { responseType: 'blob' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(resp.data);
-      a.download = `delphi_sesion_${sesionId}.csv`;
-      a.click();
+      const a = document.createElement('a'); a.href = URL.createObjectURL(resp.data);
+      a.download = `delphi_sesion_${sesionId}.csv`; a.click();
     }
   };
 
   const conConsensoLogrado = consenso.filter(c => c.consenso_logrado).length;
 
-  /* ── Pantalla de selección de sesión ────────────────── */
+  /* ── Pantalla selección sesión ── */
   if (!sesionId) return (
     <div className="page-enter">
       <div className="page-header">
         <div><h2>Wideband Delphi</h2><p>Estimación grupal iterativa con expertos</p></div>
-        <button className="btn btn-secondary btn-sm" onClick={() => navigate('/proyectos')}>
-          <ArrowLeft size={14} /> Proyectos
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setGestionModal(true)}>
+            <UserCog size={14} /> Gestión de Expertos
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => navigate('/proyectos')}>
+            <ArrowLeft size={14} /> Proyectos
+          </button>
+        </div>
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
@@ -567,10 +551,17 @@ function ModeradorView({ user }) {
           )}
         </div>
       </div>
+
+      {gestionModal && (
+        <GestionExpertosModal
+          onClose={() => { setGestionModal(false); delphi.getExpertos().then(r => setExpertosDisp(r.data)); }}
+          currentUser={user}
+        />
+      )}
     </div>
   );
 
-  /* ── Sesión seleccionada ────────────────────────────── */
+  /* ── Sesión seleccionada ── */
   return (
     <div className="page-enter">
       {/* Header */}
@@ -580,6 +571,9 @@ function ModeradorView({ user }) {
           <p>{resumen?.sesion?.proyecto}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setGestionModal(true)}>
+            <UserCog size={14} /> Expertos
+          </button>
           <select
             className="form-control"
             style={{ maxWidth: 300 }}
@@ -598,18 +592,17 @@ function ModeradorView({ user }) {
         <>
           {/* Stats */}
           <div className="stats-grid" style={{ marginBottom: 20 }}>
-            <StatCard label="Secciones"  value={secciones.length}    icon={<Layers size={18} />}   color="var(--accent)" />
+            <StatCard label="Secciones"  value={secciones.length}    icon={<Layers size={18} />}        color="var(--accent)" />
             <StatCard label="Ítems"       value={allItems.length}      icon={<ClipboardList size={18} />} color="var(--accent2)" />
-            <StatCard label="Expertos"    value={participantes.length} sub={`${rondas.length} rondas`} icon={<Users size={18} />} color="var(--green)" />
-            <StatCard label="Consensos"  value={`${conConsensoLogrado}/${allItems.length}`}
+            <StatCard label="Expertos"    value={participantes.length} sub={`${rondas.length} rondas`}   icon={<Users size={18} />} color="var(--green)" />
+            <StatCard label="Consensos"   value={`${conConsensoLogrado}/${allItems.length}`}
               sub={`${rondas.filter(r => r.estado === 'cerrada').length} rondas cerradas`}
               icon={<CheckCircle size={18} />} color="var(--amber)" />
           </div>
 
           {/* Tabs */}
           <div className="tabs" style={{ flexWrap: 'wrap' }}>
-            <TabBtn active={tab === 'setup'}        onClick={() => setTab('setup')}
-              icon={<Settings size={14} />}>Configuración</TabBtn>
+            <TabBtn active={tab === 'setup'}        onClick={() => setTab('setup')}        icon={<Settings size={14} />}>Configuración</TabBtn>
             <TabBtn active={tab === 'ronda'}        onClick={() => setTab('ronda')}
               disabled={!rondas.length || !allItems.length || !participantes.length}
               icon={<Target size={14} />}>
@@ -631,33 +624,25 @@ function ModeradorView({ user }) {
           {/* ══ CONFIGURACIÓN ══════════════════════════════ */}
           {tab === 'setup' && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <h3 style={{ fontSize: 15 }}>Secciones e Ítems</h3>
-                <button className="btn btn-primary btn-sm" onClick={() => setSeccionModal(true)}>
-                  <Plus size={14} /> Sección
-                </button>
-              </div>
+              {/* SeccionUnidadesPanel integrado */}
+              <SeccionUnidadesPanel
+                sesionId={sesionId}
+                unidades={catalogoUnidades}
+                onItemsChange={() => loadAll(sesionId)}
+                onBulkOpen={(secId) => setBulkModal({ open: true, secId })}
+              />
 
-              {secciones.length === 0
-                ? <EmptyState icon={<Layers size={36} />} text="Sin secciones. Crea la primera para organizar los ítems." />
-                : secciones.map(sec => (
-                  <SeccionCard
-                    key={sec.id}
-                    seccion={sec}
-                    sesionId={sesionId}
-                    onDelSeccion={() => handleDelSeccion(sec.id)}
-                    onAddItem={() => setItemModal({ open: true, secId: sec.id })}
-                    onBulk={() => setBulkModal({ open: true, secId: sec.id })}
-                    onDelItem={async iid => { await eliminarItem(sesionId, iid); loadAll(sesionId); }}
-                  />
-                ))
-              }
-
+              {/* Expertos Participantes */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '28px 0 14px' }}>
                 <h3 style={{ fontSize: 15 }}>Expertos Participantes</h3>
-                <button className="btn btn-primary btn-sm" onClick={() => setPartModal(true)}>
-                  <Plus size={14} /> Agregar Expertos
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-secondary btn-sm" onClick={() => setGestionModal(true)}>
+                    <UserCog size={13} /> Gestionar Expertos
+                  </button>
+                  <button className="btn btn-primary btn-sm" onClick={() => setPartModal(true)}>
+                    <Plus size={14} /> Agregar a Sesión
+                  </button>
+                </div>
               </div>
 
               {participantes.length === 0
@@ -703,10 +688,7 @@ function ModeradorView({ user }) {
             </div>
           )}
 
-          {/* ══ RONDA ACTIVA ════════════════════════════════
-              El moderador SOLO VE las estimaciones recibidas.
-              Los expertos las ingresan desde su propia vista.
-          ════════════════════════════════════════════════ */}
+          {/* ══ RONDA ACTIVA ══ */}
           {tab === 'ronda' && rondaActiva && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
@@ -741,22 +723,17 @@ function ModeradorView({ user }) {
                 </div>
               </div>
 
-              {/* Barra de progreso */}
               {stats.progreso && (
                 <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, marginBottom: 20, overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${stats.progreso.pct_completado || 0}%`, background: 'var(--green)', borderRadius: 3, transition: 'width .5s' }} />
                 </div>
               )}
 
-              {/* Aviso informativo: el moderador solo observa */}
               <div className="alert alert-info" style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
                 <Activity size={16} />
-                <span>
-                  Los expertos ingresan sus estimaciones desde su propio panel. Aquí puedes monitorear las respuestas en tiempo real.
-                </span>
+                <span>Los expertos ingresan sus estimaciones desde su propio panel. Aquí puedes monitorear en tiempo real.</span>
               </div>
 
-              {/* Estimaciones recibidas — solo lectura */}
               {estimaciones.length === 0 ? (
                 <EmptyState icon={<Activity size={36} />} text="Aún no hay estimaciones recibidas. Esperando a los expertos…" />
               ) : (
@@ -767,13 +744,7 @@ function ModeradorView({ user }) {
                   <div className="table-wrapper">
                     <table>
                       <thead>
-                        <tr>
-                          <th>Experto</th>
-                          <th>Sección</th>
-                          <th>Ítem</th>
-                          <th>Estimación</th>
-                          <th>Comentario</th>
-                        </tr>
+                        <tr><th>Experto</th><th>Sección</th><th>Ítem</th><th>Estimación</th><th>Comentario</th></tr>
                       </thead>
                       <tbody>
                         {estimaciones.map(e => (
@@ -795,7 +766,7 @@ function ModeradorView({ user }) {
             </div>
           )}
 
-          {/* ══ ESTADÍSTICAS ════════════════════════════════ */}
+          {/* ══ ESTADÍSTICAS ══ */}
           {tab === 'estadisticas' && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -870,7 +841,7 @@ function ModeradorView({ user }) {
             </div>
           )}
 
-          {/* ══ CONSENSO FINAL ══════════════════════════════ */}
+          {/* ══ CONSENSO FINAL ══ */}
           {tab === 'consenso' && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
@@ -910,9 +881,7 @@ function ModeradorView({ user }) {
                               <td>
                                 <input
                                   className="form-control"
-                                  type="number"
-                                  min="0"
-                                  step="0.5"
+                                  type="number" min="0" step="0.5"
                                   style={{ width: 140 }}
                                   value={consensoForm[it.id] || ''}
                                   onChange={e => setConsensoForm(p => ({ ...p, [it.id]: e.target.value }))}
@@ -947,13 +916,13 @@ function ModeradorView({ user }) {
             </div>
           )}
 
-          {/* ══ RESULTADOS ══════════════════════════════════ */}
+          {/* ══ RESULTADOS ══ */}
           {tab === 'resultados' && resumen && (
             <div>
               <div className="stats-grid" style={{ marginBottom: 20 }}>
-                <StatCard label="Total Estimado"  value={resumen.gran_total}         sub="suma consensuada"     icon={<BarChart2 size={18} />} color="var(--accent)" />
-                <StatCard label="Rondas"           value={resumen.total_rondas}        icon={<Target size={18} />}      color="var(--green)" />
-                <StatCard label="Expertos"         value={resumen.total_participantes} icon={<Users size={18} />}       color="var(--accent2)" />
+                <StatCard label="Total Estimado"  value={resumen.gran_total}         sub="suma consensuada"      icon={<BarChart2 size={18} />}   color="var(--accent)" />
+                <StatCard label="Rondas"           value={resumen.total_rondas}        icon={<Target size={18} />}         color="var(--green)" />
+                <StatCard label="Expertos"         value={resumen.total_participantes} icon={<Users size={18} />}          color="var(--accent2)" />
                 <StatCard label="Consensos"        value={`${conConsensoLogrado}/${resumen.consenso.length}`} icon={<CheckCircle size={18} />} color="var(--amber)" />
               </div>
 
@@ -1018,55 +987,17 @@ function ModeradorView({ user }) {
         </>
       )}
 
-      {/* ══ MODALES ═════════════════════════════════════════ */}
+      {/* ═══ MODALES ═══ */}
 
-      {seccionModal && (
-        <Modal title="Nueva Sección" onClose={() => setSeccionModal(false)}>
-          <form onSubmit={handleCrearSeccion}>
-            <div className="form-group">
-              <label>Nombre *</label>
-              <input className="form-control" placeholder="Ej: Módulo de Backend"
-                value={seccionForm.nombre} onChange={e => setSeccionForm(p => ({ ...p, nombre: e.target.value }))} required />
-            </div>
-            <div className="form-group">
-              <label>Descripción</label>
-              <textarea className="form-control" value={seccionForm.descripcion}
-                onChange={e => setSeccionForm(p => ({ ...p, descripcion: e.target.value }))} />
-            </div>
-            <ModalFooter onCancel={() => setSeccionModal(false)} saving={saving} label="Crear Sección" />
-          </form>
-        </Modal>
-      )}
-
-      {itemModal.open && (
-        <Modal title="Agregar Ítem" onClose={() => setItemModal({ open: false, secId: null })}>
-          <form onSubmit={handleAddItem}>
-            <div className="form-group">
-              <label>Nombre *</label>
-              <input className="form-control" placeholder="Ej: Autenticación JWT"
-                value={itemForm.nombre} onChange={e => setItemForm(p => ({ ...p, nombre: e.target.value }))} required />
-            </div>
-            <div className="form-group">
-              <label>Complejidad</label>
-              <select className="form-control" value={itemForm.complejidad}
-                onChange={e => setItemForm(p => ({ ...p, complejidad: e.target.value }))}>
-                <option value="">Sin especificar</option>
-                <option value="baja">Baja</option>
-                <option value="media">Media</option>
-                <option value="alta">Alta</option>
-              </select>
-            </div>
-            <ModalFooter onCancel={() => setItemModal({ open: false, secId: null })} saving={saving} label="Agregar Ítem" />
-          </form>
-        </Modal>
-      )}
-
+      {/* Bulk ítems */}
       {bulkModal.open && (
         <Modal title="Agregar Ítems en Lote" onClose={() => setBulkModal({ open: false, secId: null })}>
           <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14 }}>Un ítem por línea.</p>
-          <textarea className="form-control" rows={8}
+          <textarea
+            className="form-control" rows={8}
             placeholder={"Login / Auth\nGestión de Usuarios\nReportes\nAPI REST"}
-            value={bulkText} onChange={e => setBulkText(e.target.value)} />
+            value={bulkText} onChange={e => setBulkText(e.target.value)}
+          />
           <div className="modal-footer">
             <button className="btn btn-secondary" onClick={() => setBulkModal({ open: false, secId: null })}>Cancelar</button>
             <button className="btn btn-primary" disabled={saving || !bulkText.trim()} onClick={handleBulkAdd}>
@@ -1076,34 +1007,45 @@ function ModeradorView({ user }) {
         </Modal>
       )}
 
+      {/* Participantes de sesión */}
       {partModal && (
-        <Modal title="Agregar Expertos" onClose={() => setPartModal(false)}>
+        <Modal title="Agregar Expertos a la Sesión" onClose={() => setPartModal(false)}>
           <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14 }}>
-            Selecciona expertos registrados en el sistema.
+            Selecciona expertos del sistema para esta sesión.
           </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 360, overflowY: 'auto' }}>
-            {expertosDisp.filter(e => !participantes.find(p => p.usuario_id === e.id)).map(exp => (
-              <label key={exp.id} style={{
-                display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
-                background: selectedExp.includes(exp.id) ? 'rgba(79,142,247,.1)' : 'var(--bg3)',
-                border: `1px solid ${selectedExp.includes(exp.id) ? 'var(--accent)' : 'var(--border)'}`,
-                borderRadius: 'var(--radius)', cursor: 'pointer',
-              }}>
-                <input
-                  type="checkbox"
-                  checked={selectedExp.includes(exp.id)}
-                  onChange={e => setSelectedExp(prev =>
-                    e.target.checked ? [...prev, exp.id] : prev.filter(id => id !== exp.id)
-                  )}
-                />
-                <Avatar nombre={exp.nombre} size={28} />
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{exp.nombre}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>{exp.email}</div>
-                </div>
-              </label>
-            ))}
-          </div>
+          {expertosDisp.filter(e => !participantes.find(p => p.usuario_id === e.id)).length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text3)', fontSize: 13 }}>
+              Todos los expertos ya están agregados a esta sesión.
+              <br />
+              <button className="btn btn-secondary btn-sm" style={{ marginTop: 12 }} onClick={() => { setPartModal(false); setGestionModal(true); }}>
+                <UserCog size={13} /> Crear nuevo experto
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 360, overflowY: 'auto' }}>
+              {expertosDisp.filter(e => !participantes.find(p => p.usuario_id === e.id)).map(exp => (
+                <label key={exp.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                  background: selectedExp.includes(exp.id) ? 'rgba(79,142,247,.1)' : 'var(--bg3)',
+                  border: `1px solid ${selectedExp.includes(exp.id) ? 'var(--accent)' : 'var(--border)'}`,
+                  borderRadius: 'var(--radius)', cursor: 'pointer',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedExp.includes(exp.id)}
+                    onChange={e => setSelectedExp(prev =>
+                      e.target.checked ? [...prev, exp.id] : prev.filter(id => id !== exp.id)
+                    )}
+                  />
+                  <Avatar nombre={exp.nombre} size={28} />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{exp.nombre}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>{exp.email}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
           <div className="modal-footer" style={{ marginTop: 16 }}>
             <button className="btn btn-secondary" onClick={() => setPartModal(false)}>Cancelar</button>
             <button className="btn btn-primary" disabled={!selectedExp.length || saving} onClick={handleAddParts}>
@@ -1112,69 +1054,741 @@ function ModeradorView({ user }) {
           </div>
         </Modal>
       )}
+
+      {/* Gestión Expertos */}
+      {gestionModal && (
+        <GestionExpertosModal
+          onClose={() => {
+            setGestionModal(false);
+            delphi.getExpertos().then(r => setExpertosDisp(r.data));
+          }}
+          currentUser={user}
+        />
+      )}
     </div>
   );
 }
 
-/* ════════════════════════════════════════════════════════
-   SUB-COMPONENTES
-════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════
+   SECCION UNIDADES PANEL — integrado
+═════════════════════════════════════════════════════════  */
+function SeccionUnidadesPanel({ sesionId, unidades = [], onItemsChange, onBulkOpen, readOnly = false }) {
+  const [secciones,    setSecciones]    = useState([]);
+  const [itemsBySec,   setItemsBySec]   = useState({});
+  const [expandedSec,  setExpandedSec]  = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState('');
 
-function SeccionCard({ seccion, onDelSeccion, onAddItem, onBulk, onDelItem }) {
-  const [expanded, setExpanded] = useState(true);
+  const [showSecForm,  setShowSecForm]  = useState(false);
+  const [editSec,      setEditSec]      = useState(null);
+  const [secForm,      setSecForm]      = useState({ nombre: '', descripcion: '' });
+  const [savingSec,    setSavingSec]    = useState(false);
+
+  const [addingUnit,   setAddingUnit]   = useState(null);
+  const [unitSel,      setUnitSel]      = useState('');
+  const [unitPrinc,    setUnitPrinc]    = useState(false);
+  const [savingUnit,   setSavingUnit]   = useState(false);
+
+  const [showItemForm, setShowItemForm] = useState(null);
+  const [itemForm,     setItemForm]     = useState({ nombre: '', descripcion: '', complejidad: '', unidad_id: '' });
+  const [savingItem,   setSavingItem]   = useState(false);
+
+  const cargarSecciones = useCallback(async () => {
+    if (!sesionId) return;
+    setLoading(true);
+    try {
+      const res = await delphi.getSecciones(sesionId);
+      setSecciones(res.data);
+    } catch { setError('Error cargando secciones'); }
+    setLoading(false);
+  }, [sesionId]);
+
+  useEffect(() => { cargarSecciones(); }, [cargarSecciones]);
+
+  const cargarItems = async (secId) => {
+    try {
+      const res = await delphi.getItemsSeccion(secId);
+      setItemsBySec(prev => ({ ...prev, [secId]: res.data }));
+    } catch { /* silencioso */ }
+  };
+
+  const toggleExpand = async (secId) => {
+    if (expandedSec === secId) { setExpandedSec(null); return; }
+    setExpandedSec(secId);
+    setShowItemForm(null);
+    setAddingUnit(null);
+    if (!itemsBySec[secId]) await cargarItems(secId);
+  };
+
+  /* ── CRUD Sección ── */
+  const abrirNuevaSeccion = () => {
+    setEditSec(null);
+    setSecForm({ nombre: '', descripcion: '' });
+    setError('');
+    setShowSecForm(true);
+  };
+
+  const abrirEditarSeccion = (sec, e) => {
+    e.stopPropagation();
+    setEditSec(sec);
+    setSecForm({ nombre: sec.nombre, descripcion: sec.descripcion || '' });
+    setError('');
+    setShowSecForm(true);
+  };
+
+  const guardarSeccion = async () => {
+    if (!secForm.nombre.trim()) return setError('El nombre de la sección es requerido');
+    setSavingSec(true);
+    try {
+      if (editSec) {
+        await delphi.editarSeccion(editSec.id, { ...secForm, orden: editSec.orden });
+      } else {
+        await delphi.crearSeccion(sesionId, { ...secForm, orden: secciones.length });
+      }
+      await cargarSecciones();
+      setShowSecForm(false); setEditSec(null);
+    } catch (e) { setError(e.response?.data?.error || 'Error al guardar sección'); }
+    setSavingSec(false);
+  };
+
+  const eliminarSeccion = async (sec, e) => {
+    e.stopPropagation();
+    if (!window.confirm(`¿Eliminar la sección "${sec.nombre}" y todos sus ítems?`)) return;
+    try {
+      await delphi.delSeccion(sec.id);
+      if (expandedSec === sec.id) setExpandedSec(null);
+      await cargarSecciones();
+      setItemsBySec(prev => { const n = { ...prev }; delete n[sec.id]; return n; });
+      onItemsChange?.();
+    } catch (e) { setError(e.response?.data?.error || 'Error al eliminar sección'); }
+  };
+
+  /* ── Unidades ── */
+  const unidadesDisponibles = (sec) => {
+    const asignadas = new Set((sec.unidades || []).map(u => u.id));
+    return unidades.filter(u => !asignadas.has(u.id));
+  };
+
+  const agregarUnidad = async (secId) => {
+    if (!unitSel) return;
+    setSavingUnit(true);
+    try {
+      await delphi.addUnidadSeccion(secId, { unidad_id: +unitSel, es_principal: unitPrinc });
+      await cargarSecciones();
+      setAddingUnit(null); setUnitSel(''); setUnitPrinc(false);
+    } catch (e) { setError(e.response?.data?.error || 'Error al agregar unidad'); }
+    setSavingUnit(false);
+  };
+
+  const quitarUnidad = async (secId, unidadId, e) => {
+    e.stopPropagation();
+    try {
+      await delphi.delUnidadSeccion(secId, unidadId);
+      await cargarSecciones();
+    } catch (e) { setError(e.response?.data?.error || 'Error al quitar unidad'); }
+  };
+
+  /* ── CRUD Ítem ── */
+  const abrirNuevoItem = (sec, e) => {
+    e.stopPropagation();
+    const principal = (sec.unidades || []).find(u => u.es_principal);
+    setItemForm({ nombre: '', descripcion: '', complejidad: '', unidad_id: principal?.id || '' });
+    setError('');
+    setShowItemForm(sec.id);
+  };
+
+  const guardarItem = async (sec) => {
+    if (!itemForm.nombre.trim()) return setError('El nombre del ítem es requerido');
+    setSavingItem(true);
+    try {
+      await delphi.addItem(sec.id, { ...itemForm, unidad_id: itemForm.unidad_id ? +itemForm.unidad_id : null, sesion_id: sesionId });
+      await cargarItems(sec.id);
+      setShowItemForm(null);
+      setItemForm({ nombre: '', descripcion: '', complejidad: '', unidad_id: '' });
+      onItemsChange?.();
+    } catch (e) { setError(e.response?.data?.error || 'Error al crear ítem'); }
+    setSavingItem(false);
+  };
+
+  const eliminarItemSec = async (sec, itemId) => {
+    if (!window.confirm('¿Eliminar este ítem?')) return;
+    try {
+      await eliminarItem(sesionId, itemId);
+      await cargarItems(sec.id);
+      onItemsChange?.();
+    } catch (e) { setError(e.response?.data?.error || 'Error al eliminar ítem'); }
+  };
+
   return (
-    <div style={{ marginBottom: 16, border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-      <div
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', background: 'var(--bg3)', cursor: 'pointer' }}
-        onClick={() => setExpanded(e => !e)}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontWeight: 700 }}>§</span>
-          <strong style={{ fontSize: 14 }}>{seccion.nombre}</strong>
-          <span style={{ fontSize: 12, color: 'var(--text3)' }}>{(seccion._items || []).length} ítems</span>
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div>
+          <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Secciones e Ítems</h3>
+          <p style={{ fontSize: 12, color: 'var(--text2)', marginTop: 3 }}>
+            Organiza los ítems y asigna unidades de medida por sección
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
-          <button className="btn btn-secondary btn-sm" onClick={onBulk}>
-            <Plus size={12} /> Bulk
+        {!readOnly && !showSecForm && (
+          <button className="btn btn-primary btn-sm" onClick={abrirNuevaSeccion}>
+            <Plus size={13} /> Nueva Sección
           </button>
-          <button className="btn btn-primary btn-sm" onClick={onAddItem}>
-            <Plus size={12} /> Ítem
-          </button>
-          <button className="btn btn-danger btn-sm" onClick={onDelSeccion}>
-            <Trash2 size={12} />
-          </button>
-          <span style={{ color: 'var(--text3)', marginLeft: 4 }}>
-            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </span>
-        </div>
+        )}
       </div>
-      {expanded && (
-        <div style={{ padding: '16px 18px', background: 'var(--bg2)' }}>
-          {(!seccion._items || seccion._items.length === 0)
-            ? <p style={{ color: 'var(--text3)', fontSize: 13 }}>Sin ítems todavía.</p>
-            : seccion._items.map((it, i) => (
-              <div key={it.id} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
-                background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 6,
-              }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text3)', minWidth: 22 }}>{i + 1}</span>
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{it.nombre}</span>
-                {it.complejidad && (
-                  <span style={{ fontSize: 11, fontWeight: 600, color: { baja: 'var(--green)', media: 'var(--amber)', alta: 'var(--red)' }[it.complejidad] }}>
-                    {it.complejidad.toUpperCase()}
+
+      {error && (
+        <div className="alert alert-error" style={{ marginBottom: 12 }}>
+          {error}
+          <button onClick={() => setError('')} style={{ float: 'right', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>✕</button>
+        </div>
+      )}
+
+      {/* Formulario nueva / editar sección */}
+      {showSecForm && (
+        <div className="card" style={{ marginBottom: 16, background: 'var(--bg3)', border: '1px solid var(--accent)' }}>
+          <h5 style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--accent)' }}>
+            {editSec ? `Editar: ${editSec.nombre}` : 'Nueva Sección'}
+          </h5>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Nombre *</label>
+              <input
+                className="form-control"
+                placeholder="ej. Backend, Frontend, Base de Datos"
+                value={secForm.nombre}
+                onChange={e => setSecForm(f => ({ ...f, nombre: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && guardarSeccion()}
+                autoFocus
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Descripción</label>
+              <input
+                className="form-control"
+                placeholder="Descripción opcional"
+                value={secForm.descripcion}
+                onChange={e => setSecForm(f => ({ ...f, descripcion: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <button className="btn btn-primary btn-sm" onClick={guardarSeccion} disabled={savingSec}>
+              {savingSec ? <><Spinner /> Guardando…</> : (editSec ? 'Actualizar' : 'Crear Sección')}
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => { setShowSecForm(false); setEditSec(null); }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <Spinner full />
+      ) : secciones.length === 0 ? (
+        <EmptyState icon={<Layers size={36} />} text="No hay secciones. Crea una para organizar los ítems de estimación." />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {secciones.map(sec => {
+            const isOpen = expandedSec === sec.id;
+            const items  = itemsBySec[sec.id] || [];
+
+            return (
+              <div key={sec.id} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+                {/* Cabecera */}
+                <div
+                  style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', background: isOpen ? 'rgba(79,142,247,.06)' : 'var(--bg3)', borderBottom: isOpen ? '1px solid var(--border)' : 'none' }}
+                  onClick={() => toggleExpand(sec.id)}
+                >
+                  <span style={{ fontSize: 13, color: 'var(--text3)', minWidth: 14 }}>{isOpen ? '▼' : '▶'}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{sec.nombre}</div>
+                    {sec.descripcion && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>{sec.descripcion}</div>}
+                  </div>
+
+                  {/* Badges unidades */}
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', maxWidth: 220 }}>
+                    {(sec.unidades || []).map(u => (
+                      <span key={u.id} className={`badge ${u.es_principal ? 'badge-blue' : 'badge-gray'}`} style={{ fontSize: 10 }} title={u.nombre}>
+                        {u.es_principal ? '★ ' : ''}{u.codigo}
+                      </span>
+                    ))}
+                    {(sec.unidades || []).length === 0 && (
+                      <span style={{ fontSize: 10, color: 'var(--text3)', fontStyle: 'italic' }}>Sin unidades</span>
+                    )}
+                  </div>
+
+                  <span className="badge badge-gray" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>
+                    {sec.total_items || 0} ítem{sec.total_items !== 1 ? 's' : ''}
                   </span>
+
+                  {!readOnly && (
+                    <div style={{ display: 'flex', gap: 4 }} onClick={e => e.stopPropagation()}>
+                      <button className="btn btn-secondary btn-sm" style={{ padding: '4px 8px' }} onClick={e => abrirEditarSeccion(sec, e)} title="Editar">
+                        <Edit2 size={12} />
+                      </button>
+                      <button className="btn btn-secondary btn-sm" style={{ padding: '4px 8px' }} onClick={e => { e.stopPropagation(); onBulkOpen?.(sec.id); }} title="Agregar en lote">
+                        <Plus size={12} /> Bulk
+                      </button>
+                      <button className="btn btn-danger btn-sm" style={{ padding: '4px 8px' }} onClick={e => eliminarSeccion(sec, e)} title="Eliminar">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Cuerpo expandido */}
+                {isOpen && (
+                  <div style={{ padding: '18px 20px', background: 'var(--bg2)' }}>
+
+                    {/* Panel unidades */}
+                    <div style={{ marginBottom: 20 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                          Unidades de Medida
+                        </span>
+                        {!readOnly && addingUnit !== sec.id && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: 11, padding: '3px 9px' }}
+                            onClick={() => { setAddingUnit(sec.id); setUnitSel(''); setUnitPrinc((sec.unidades || []).length === 0); }}
+                          >
+                            <Plus size={11} /> Agregar unidad
+                          </button>
+                        )}
+                        <small style={{ fontSize: 11, color: 'var(--text3)' }}>
+                          Puedes asignar múltiples unidades (horas, puntos de función, etc.)
+                        </small>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: addingUnit === sec.id ? 10 : 0 }}>
+                        {(sec.unidades || []).length === 0 ? (
+                          <span style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '6px 0' }}>
+                            Sin unidades asignadas. Las unidades definen cómo los expertos estimarán los ítems.
+                          </span>
+                        ) : (sec.unidades || []).map(u => (
+                          <div key={u.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            background: u.es_principal ? 'rgba(79,142,247,.12)' : 'var(--bg3)',
+                            border: `1px solid ${u.es_principal ? 'rgba(79,142,247,.35)' : 'var(--border)'}`,
+                            borderRadius: 8, padding: '5px 10px', fontSize: 13,
+                          }}>
+                            {u.es_principal && <span title="Principal" style={{ fontSize: 12 }}>★</span>}
+                            <span style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{u.codigo}</span>
+                            <span style={{ color: 'var(--text2)', fontSize: 12 }}>{u.nombre}</span>
+                            {u.es_principal && <span className="badge badge-blue" style={{ fontSize: 9, padding: '1px 5px' }}>principal</span>}
+                            {!readOnly && (
+                              <button onClick={e => quitarUnidad(sec.id, u.id, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: 14, padding: '0 2px' }} title="Quitar">✕</button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      {!readOnly && addingUnit === sec.id && (
+                        <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <select
+                            className="form-control"
+                            style={{ flex: 1, minWidth: 200, fontSize: 13 }}
+                            value={unitSel}
+                            onChange={e => setUnitSel(e.target.value)}
+                          >
+                            <option value="">— Seleccionar unidad —</option>
+                            {unidadesDisponibles(sec).map(u => (
+                              <option key={u.id} value={u.id}>{u.codigo} — {u.nombre}</option>
+                            ))}
+                          </select>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text2)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <input type="checkbox" checked={unitPrinc} onChange={e => setUnitPrinc(e.target.checked)} />
+                            Marcar como principal
+                          </label>
+                          <button className="btn btn-primary btn-sm" onClick={() => agregarUnidad(sec.id)} disabled={!unitSel || savingUnit}>
+                            {savingUnit ? <Spinner /> : 'Agregar'}
+                          </button>
+                          <button className="btn btn-secondary btn-sm" onClick={() => setAddingUnit(null)}>Cancelar</button>
+                          {unidadesDisponibles(sec).length === 0 && (
+                            <span style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>No hay más unidades en el catálogo.</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Panel ítems */}
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                          Ítems de Trabajo
+                        </span>
+                        {!readOnly && showItemForm !== sec.id && (
+                          <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, padding: '3px 9px' }} onClick={e => abrirNuevoItem(sec, e)}>
+                            <Plus size={11} /> Agregar ítem
+                          </button>
+                        )}
+                        <small style={{ fontSize: 11, color: 'var(--text3)' }}>Cada ítem puede tener su propia unidad de medida</small>
+                      </div>
+
+                      {/* Formulario nuevo ítem */}
+                      {!readOnly && showItemForm === sec.id && (
+                        <div className="card" style={{ marginBottom: 10, background: 'var(--bg)', border: '1px solid var(--accent)' }}>
+                          <h6 style={{ fontSize: 12, fontWeight: 700, marginBottom: 12, color: 'var(--accent)' }}>Nuevo Ítem en "{sec.nombre}"</h6>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label>Nombre *</label>
+                              <input
+                                className="form-control"
+                                placeholder="ej. Módulo de login"
+                                value={itemForm.nombre}
+                                onChange={e => setItemForm(f => ({ ...f, nombre: e.target.value }))}
+                                autoFocus
+                              />
+                            </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label>Unidad de Medida</label>
+                              <select
+                                className="form-control"
+                                value={itemForm.unidad_id}
+                                onChange={e => setItemForm(f => ({ ...f, unidad_id: e.target.value }))}
+                              >
+                                <option value="">Sin unidad específica</option>
+                                {(sec.unidades || []).length > 0 && (
+                                  <optgroup label={`Unidades de "${sec.nombre}"`}>
+                                    {(sec.unidades || []).map(u => (
+                                      <option key={u.id} value={u.id}>{u.es_principal ? '★ ' : ''}{u.codigo} — {u.nombre}</option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                                {unidades.filter(u => !(sec.unidades || []).find(su => su.id === u.id)).length > 0 && (
+                                  <optgroup label="Otras unidades del catálogo">
+                                    {unidades.filter(u => !(sec.unidades || []).find(su => su.id === u.id)).map(u => (
+                                      <option key={u.id} value={u.id}>{u.codigo} — {u.nombre}</option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                              </select>
+                            </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label>Complejidad</label>
+                              <select className="form-control" value={itemForm.complejidad} onChange={e => setItemForm(f => ({ ...f, complejidad: e.target.value }))}>
+                                {COMPLEJIDAD_OPTS.map(c => <option key={c} value={c}>{c || 'Sin especificar'}</option>)}
+                              </select>
+                            </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label>Descripción</label>
+                              <input className="form-control" placeholder="Descripción opcional" value={itemForm.descripcion} onChange={e => setItemForm(f => ({ ...f, descripcion: e.target.value }))} />
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => guardarItem(sec)} disabled={savingItem}>
+                              {savingItem ? <><Spinner /> Guardando…</> : 'Crear Ítem'}
+                            </button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => setShowItemForm(null)}>Cancelar</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Lista de ítems */}
+                      {!itemsBySec[sec.id] ? (
+                        <div style={{ color: 'var(--text3)', fontSize: 12, fontStyle: 'italic', padding: '4px 0' }}>
+                          <Spinner /> Cargando ítems...
+                        </div>
+                      ) : items.length === 0 ? (
+                        <div style={{ color: 'var(--text3)', fontSize: 12, fontStyle: 'italic', padding: '10px 14px', background: 'var(--bg3)', borderRadius: 6, border: '1px dashed var(--border)', textAlign: 'center' }}>
+                          Esta sección no tiene ítems. {!readOnly && 'Agrega el primero con el botón de arriba.'}
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                          {items.map(item => (
+                            <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 13px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.nombre}</div>
+                                {item.descripcion && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{item.descripcion}</div>}
+                              </div>
+                              {item.unidad_codigo && (
+                                <span className="badge badge-blue" style={{ fontSize: 10, whiteSpace: 'nowrap' }} title={item.unidad_nombre}>
+                                  {item.unidad_codigo}
+                                </span>
+                              )}
+                              {item.complejidad && (
+                                <span className={`badge ${COMPLEJIDAD_BADGE[item.complejidad] || 'badge-gray'}`} style={{ fontSize: 10, textTransform: 'capitalize', whiteSpace: 'nowrap' }}>
+                                  {item.complejidad}
+                                </span>
+                              )}
+                              {!readOnly && (
+                                <button className="btn btn-danger btn-sm" style={{ fontSize: 11, padding: '3px 8px', flexShrink: 0 }} onClick={() => eliminarItemSec(sec, item.id)}>
+                                  <Trash2 size={12} />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
-                <button className="btn btn-danger btn-sm" onClick={() => onDelItem(it.id)}>
-                  <Trash2 size={12} />
-                </button>
               </div>
-            ))
-          }
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
+
+/* ═════════════════════════════════════════════════════════
+   GESTION EXPERTOS MODAL — integrado
+═════════════════════════════════════════════════════════  */
+function GestionExpertosModal({ onClose, currentUser }) {
+  const isAdmin = currentUser?.rol === 'admin';
+
+  const [usuarios,  setUsuarios]  = useState([]);
+  const [roles,     setRoles]     = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [showForm,  setShowForm]  = useState(false);
+  const [editando,  setEditando]  = useState(null);
+  const [saving,    setSaving]    = useState(false);
+  const [error,     setError]     = useState('');
+  const [success,   setSuccess]   = useState('');
+  const [filtroRol, setFiltroRol] = useState('');
+  const [showPass,  setShowPass]  = useState(false);
+
+  const formInit = { nombre: '', email: '', password: '', rol_id: '', activo: true };
+  const [form, setForm] = useState(formInit);
+
+  useEffect(() => { cargar(); }, []);
+
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const [uRes, rRes] = await Promise.all([usuariosAPI.getAll(), usuariosAPI.getRoles()]);
+      setUsuarios(uRes.data);
+      const rolesDisp = isAdmin ? rRes.data : rRes.data.filter(r => r.nombre === 'experto');
+      setRoles(rolesDisp);
+    } catch { setError('Error cargando datos'); }
+    setLoading(false);
+  };
+
+  const abrirNuevo = () => {
+    setEditando(null);
+    const rolPorDefecto = roles.find(r => r.nombre === 'experto')?.id || roles[0]?.id || '';
+    setForm({ ...formInit, rol_id: rolPorDefecto });
+    setError(''); setShowPass(false);
+    setShowForm(true);
+  };
+
+  const abrirEditar = (u) => {
+    setEditando(u);
+    setForm({ nombre: u.nombre, email: u.email, password: '', rol_id: u.rol_id, activo: !!u.activo });
+    setError(''); setShowPass(false);
+    setShowForm(true);
+  };
+
+  const guardar = async () => {
+    if (!form.nombre.trim() || !form.email.trim()) return setError('Nombre y email son requeridos');
+    if (!editando && form.password.length < 6) return setError('La contraseña debe tener al menos 6 caracteres');
+    if (!form.rol_id) return setError('Selecciona un rol');
+    setSaving(true); setError('');
+    try {
+      if (editando) {
+        const payload = { nombre: form.nombre, email: form.email, activo: form.activo };
+        if (isAdmin) payload.rol_id = form.rol_id;
+        if (form.password) payload.password = form.password;
+        await usuariosAPI.update(editando.id, payload);
+        setSuccess('Usuario actualizado correctamente');
+      } else {
+        await usuariosAPI.create({ nombre: form.nombre, email: form.email, password: form.password, rol_id: form.rol_id });
+        setSuccess('Usuario creado correctamente');
+      }
+      await cargar();
+      setShowForm(false);
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (e) { setError(e.response?.data?.error || 'Error al guardar'); }
+    setSaving(false);
+  };
+
+  const toggleActivo = async (u) => {
+    try {
+      await usuariosAPI.update(u.id, { activo: !u.activo });
+      await cargar();
+    } catch (e) { setError(e.response?.data?.error || 'Error'); }
+  };
+
+  const eliminar = async (u) => {
+    if (!window.confirm(`¿Eliminar el usuario "${u.nombre}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      await usuariosAPI.delete(u.id);
+      await cargar();
+      setSuccess('Usuario eliminado');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (e) { setError(e.response?.data?.error || 'Error al eliminar'); }
+  };
+
+  const usuariosFiltrados = filtroRol ? usuarios.filter(u => u.rol === filtroRol) : usuarios;
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose?.()}>
+      <div className="modal modal-lg" style={{ maxWidth: 820 }}>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 18, display: 'flex', alignItems: 'center', gap: 10 }}>
+              {isAdmin ? <ShieldCheck size={20} /> : <Users size={20} />}
+              {isAdmin ? 'Gestión de Usuarios' : 'Gestión de Expertos'}
+            </h3>
+            <p style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4 }}>
+              {isAdmin ? 'Crea y administra todos los usuarios del sistema' : 'Crea y administra los expertos para las sesiones Delphi'}
+            </p>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={onClose}><X size={14} /> Cerrar</button>
+        </div>
+
+        {/* Alertas */}
+        {error   && <div className="alert alert-error"   style={{ marginBottom: 12 }}>{error}   <button onClick={() => setError('')}   style={{ float: 'right', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>✕</button></div>}
+        {success && <div className="alert alert-success" style={{ marginBottom: 12 }}>{success} <button onClick={() => setSuccess('')} style={{ float: 'right', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>✕</button></div>}
+
+        {/* Formulario */}
+        {showForm && (
+          <div className="card" style={{ marginBottom: 20, background: 'var(--bg3)', border: '1px solid var(--accent)' }}>
+            <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 16, color: 'var(--accent)' }}>
+              {editando ? `Editando: ${editando.nombre}` : 'Nuevo Usuario'}
+            </h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="form-group">
+                <label>Nombre completo *</label>
+                <input className="form-control" placeholder="ej. María García" value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label>Email *</label>
+                <input className="form-control" type="email" placeholder="usuario@empresa.com" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label>{editando ? 'Nueva Contraseña (vacío = sin cambio)' : 'Contraseña *'}</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    className="form-control"
+                    type={showPass ? 'text' : 'password'}
+                    placeholder="Mínimo 6 caracteres"
+                    value={form.password}
+                    onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                    style={{ paddingRight: 36 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPass(v => !v)}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)' }}
+                  >
+                    {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Rol *</label>
+                <select className="form-control" value={form.rol_id} onChange={e => setForm(f => ({ ...f, rol_id: +e.target.value }))} disabled={!isAdmin && !!editando}>
+                  <option value="">— Seleccionar rol —</option>
+                  {roles.map(r => <option key={r.id} value={r.id} style={{ textTransform: 'capitalize' }}>{r.nombre}</option>)}
+                </select>
+                {!isAdmin && <small style={{ color: 'var(--text3)', fontSize: 11 }}>Los moderadores solo pueden asignar el rol experto.</small>}
+              </div>
+              {editando && (
+                <div className="form-group">
+                  <label>Estado</label>
+                  <select className="form-control" value={form.activo ? '1' : '0'} onChange={e => setForm(f => ({ ...f, activo: e.target.value === '1' }))}>
+                    <option value="1">✅ Activo</option>
+                    <option value="0">🚫 Inactivo</option>
+                  </select>
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button className="btn btn-primary btn-sm" onClick={guardar} disabled={saving}>
+                {saving ? <><Spinner /> Guardando…</> : (editando ? 'Actualizar' : 'Crear Usuario')}
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setShowForm(false); setEditando(null); }}>Cancelar</button>
+            </div>
+          </div>
+        )}
+
+        {/* Toolbar */}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+          {isAdmin && (
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {['', ...new Set(usuarios.map(u => u.rol))].map(r => (
+                <button
+                  key={r}
+                  className={`btn btn-sm ${filtroRol === r ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setFiltroRol(r)}
+                  style={{ textTransform: 'capitalize' }}
+                >
+                  {r || 'Todos'} ({r ? usuarios.filter(u => u.rol === r).length : usuarios.length})
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{ flex: 1 }} />
+          {!showForm && (
+            <button className="btn btn-primary btn-sm" onClick={abrirNuevo}>
+              <Plus size={13} /> {isAdmin ? 'Nuevo Usuario' : 'Nuevo Experto'}
+            </button>
+          )}
+        </div>
+
+        {/* Tabla */}
+        {loading ? (
+          <Spinner full />
+        ) : usuariosFiltrados.length === 0 ? (
+          <EmptyState icon={<Users size={36} />} text="No hay usuarios en esta categoría" />
+        ) : (
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th>Registrado</th><th style={{ textAlign: 'center' }}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usuariosFiltrados.map(u => (
+                  <tr key={u.id}>
+                    <td className="td-mono" style={{ color: 'var(--text3)', fontSize: 12 }}>{u.id}</td>
+                    <td style={{ fontWeight: 600 }}>{u.nombre}</td>
+                    <td className="td-mono" style={{ fontSize: 12 }}>{u.email}</td>
+                    <td><span className={`badge ${ROL_BADGE[u.rol] || 'badge-gray'}`} style={{ textTransform: 'capitalize' }}>{u.rol}</span></td>
+                    <td><span className={`badge ${u.activo ? 'badge-green' : 'badge-gray'}`}>{u.activo ? 'Activo' : 'Inactivo'}</span></td>
+                    <td style={{ fontSize: 12, color: 'var(--text2)' }}>{new Date(u.creado_en).toLocaleDateString('es-DO')}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 5, justifyContent: 'center' }}>
+                        <button className="btn btn-secondary btn-sm" onClick={() => abrirEditar(u)} title="Editar">
+                          <Edit2 size={12} />
+                        </button>
+                        <button
+                          className={`btn btn-sm ${u.activo ? 'btn-danger' : 'btn-success'}`}
+                          onClick={() => toggleActivo(u)}
+                          title={u.activo ? 'Desactivar' : 'Activar'}
+                          style={{ fontSize: 11 }}
+                        >
+                          {u.activo ? 'Desactivar' : 'Activar'}
+                        </button>
+                        {isAdmin && (
+                          <button className="btn btn-danger btn-sm" onClick={() => eliminar(u)} title="Eliminar">
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p style={{ fontSize: 11, color: 'var(--text3)', marginTop: 14, textAlign: 'center' }}>
+          {isAdmin ? 'Admin: puede crear cualquier rol y eliminar usuarios.' : 'Moderador: puede crear expertos y activar/desactivar usuarios.'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ═════════════════════════════════════════════════════════
+   SUB-COMPONENTES COMPARTIDOS
+═════════════════════════════════════════════════════════  */
 
 function StatCard({ label, value, sub, color, icon }) {
   return (
@@ -1191,8 +1805,12 @@ function StatCard({ label, value, sub, color, icon }) {
 
 function TabBtn({ active, onClick, disabled, children, icon }) {
   return (
-    <button className={`tab ${active ? 'active' : ''}`} onClick={onClick} disabled={disabled}
-      style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <button
+      className={`tab ${active ? 'active' : ''}`}
+      onClick={onClick}
+      disabled={disabled}
+      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+    >
       {icon}{children}
     </button>
   );
@@ -1223,17 +1841,6 @@ function Modal({ title, onClose, children }) {
         </div>
         {children}
       </div>
-    </div>
-  );
-}
-
-function ModalFooter({ onCancel, saving, label }) {
-  return (
-    <div className="modal-footer">
-      <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancelar</button>
-      <button type="submit" className="btn btn-primary" disabled={saving}>
-        {saving ? <><Spinner /> Guardando…</> : `+ ${label}`}
-      </button>
     </div>
   );
 }

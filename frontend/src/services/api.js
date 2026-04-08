@@ -105,4 +105,10 @@ export const getResumenV2      = sid     => API.get(`/delphi/sesion/${sid}/resum
 export const getMisSesiones    = ()      => API.get('/delphi/mis-sesiones');
 export const getFormatos       = ()      => API.get('/delphi/formatos-exportacion');
 
+export const getUsuarios      = ()       => API.get('/usuarios');
+export const getRoles         = ()       => API.get('/usuarios/roles');
+export const crearUsuario     = data     => API.post('/usuarios', data);
+export const actualizarUsuario= (id, d)  => API.put(`/usuarios/${id}`, d);
+export const eliminarUsuario  = id       => API.delete(`/usuarios/${id}`);
+
 export default API;

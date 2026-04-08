@@ -67,6 +67,20 @@ router.post('/sesion/:sid/participantes',
         `INSERT IGNORE INTO sesion_participantes (sesion_id, usuario_id) VALUES (?,?)`,
         [req.params.sid, req.body.usuario_id]
       );
+
+      // ✅ CREAR TAMBIÉN EN expertos_sesion
+      const [[usuario]] = await db.execute(
+        'SELECT nombre, email FROM usuarios WHERE id = ?',
+        [req.body.usuario_id]
+      );
+      if (usuario) {
+        await db.execute(
+          `INSERT IGNORE INTO expertos_sesion (sesion_id, usuario_id, nombre, email)
+           VALUES (?, ?, ?, ?)`,
+          [req.params.sid, req.body.usuario_id, usuario.nombre, usuario.email]
+        );
+      }
+
       res.status(201).json({ id: r.insertId, usuario_id: req.body.usuario_id });
     } catch (err) { res.status(500).json({ error: err.message }); }
   }
@@ -81,16 +95,29 @@ router.post('/sesion/:sid/participantes/bulk',
       return res.status(400).json({ error: 'usuario_ids debe ser un array no vacío' });
     try {
       for (const uid of usuario_ids) {
+        // 1. Agregar a sesion_participantes
         await db.execute(
           `INSERT IGNORE INTO sesion_participantes (sesion_id, usuario_id) VALUES (?,?)`,
           [req.params.sid, uid]
         );
+
+        // 2. ✅ CREAR TAMBIÉN EN expertos_sesion
+        const [[usuario]] = await db.execute(
+          'SELECT nombre, email FROM usuarios WHERE id = ?',
+          [uid]
+        );
+        if (usuario) {
+          await db.execute(
+            `INSERT IGNORE INTO expertos_sesion (sesion_id, usuario_id, nombre, email)
+             VALUES (?, ?, ?, ?)`,
+            [req.params.sid, uid, usuario.nombre, usuario.email]
+          );
+        }
       }
       res.status(201).json({ agregados: usuario_ids.length });
     } catch (err) { res.status(500).json({ error: err.message }); }
   }
 );
-
 // DELETE /api/delphi/sesion/:sid/participantes/:uid
 router.delete('/sesion/:sid/participantes/:uid',
   requireRole('admin', 'moderador'),
@@ -444,13 +471,11 @@ router.post('/rondas/:rid/estimaciones/bulk',
   async (req, res) => {
     if (!validate(req, res)) return;
 
-    /* Expertos siempre usan su propio ID; moderadores pueden pasar usuario_id */
     const usuario_id = isExperto(req)
       ? req.user.id
       : (req.body.usuario_id || req.user.id);
 
     try {
-      /* Verificar que la ronda existe y está abierta */
       const [[ronda]] = await db.execute(
         `SELECT id, sesion_id, estado FROM rondas_delphi WHERE id = ?`,
         [req.params.rid]
@@ -459,7 +484,6 @@ router.post('/rondas/:rid/estimaciones/bulk',
       if (ronda.estado !== 'abierta')
         return res.status(409).json({ error: 'La ronda está cerrada' });
 
-      /* Para expertos: verificar que es participante */
       if (isExperto(req)) {
         const [[{ es_part }]] = await db.execute(
           `SELECT COUNT(*) AS es_part
@@ -471,16 +495,23 @@ router.post('/rondas/:rid/estimaciones/bulk',
           return res.status(403).json({ error: 'No eres participante de esta sesión' });
       }
 
+      // ✅ Obtener el experto_id correcto de expertos_sesion
+      const [[expertoData]] = await db.execute(
+        `SELECT id FROM expertos_sesion WHERE sesion_id = ? AND usuario_id = ?`,
+        [ronda.sesion_id, usuario_id]
+      );
+      const experto_id = expertoData?.id || 0;
+
       for (const e of req.body.estimaciones) {
         await db.execute(
           `INSERT INTO estimaciones_delphi
              (ronda_id, experto_id, usuario_id, item_id, estimacion, comentario)
-           VALUES (?, 0, ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              estimacion = VALUES(estimacion),
              comentario = VALUES(comentario),
              enviado_en = NOW()`,
-          [req.params.rid, usuario_id, e.item_id, e.estimacion, e.comentario || null]
+          [req.params.rid, experto_id, usuario_id, e.item_id, e.estimacion, e.comentario || null]
         );
       }
 

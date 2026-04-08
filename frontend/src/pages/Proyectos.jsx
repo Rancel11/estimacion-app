@@ -111,7 +111,7 @@ export default function Proyectos() {
       ) : proyectos.length === 0 ? (
         <div className="card">
           <div className="empty-state">
-            <div className="emoji">📁</div>
+            <div className="emoji"></div>
             <p>No hay proyectos todavía</p>
             {isMod && (
               <button className="btn btn-primary" onClick={() => setModal(true)}>

@@ -6,6 +6,7 @@ const NAV_COMPLETO = [
   { section: 'Principal' },
   { path: '/',          label: 'Dashboard',       icon: '', roles: ['admin', 'moderador'] },
   { path: '/proyectos', label: 'Proyectos',        icon: '', roles: ['admin', 'moderador'] },
+  { path: '/sesiones',  label: 'Sesiones',         icon: '', roles: ['admin', 'moderador'] },
   { section: 'Métodos' },
   { path: '/pert',      label: 'PERT',             icon: '', roles: ['admin', 'moderador'] },
   { path: '/delphi',    label: 'Wideband Delphi',  icon: '', roles: ['admin', 'moderador', 'experto'] },

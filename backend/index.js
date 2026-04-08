@@ -18,6 +18,7 @@ app.use('/api/proyectos', require('./routes/proyectos'));
 app.use('/api/sesiones',  require('./routes/sesiones'));
 app.use('/api/pert',      require('./routes/pert'));
 app.use('/api/delphi',    require('./routes/delphi'));
+app.use('/api/usuarios', require('./routes/usuarios'));
 
 // ── Catálogos (sin auth) ──────────────────────────────────
 app.get('/api/catalogos', async (_req, res) => {
@@ -46,7 +47,8 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Error interno del servidor' });
 });
 
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
-  console.log(`🚀  Servidor corriendo → http://localhost:${PORT}`)
+  console.log(`  Servidor corriendo → http://localhost:${PORT}`)
 );
